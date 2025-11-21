@@ -7,7 +7,7 @@ import pandas as pd
 
 # 页面配置
 st.set_page_config(
-    page_title="句子错误评估系统",
+    page_title="句子级别评估系统 v2",
     page_icon="📝",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -42,7 +42,7 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     
-    .his-sentence {
+    .original-sentence {
         font-size: 1.1rem;
         font-weight: bold;
         color: #2c3e50;
@@ -50,6 +50,17 @@ st.markdown("""
         padding: 1rem;
         border-radius: 0.375rem;
         border-left: 4px solid #1976d2;
+        margin-bottom: 1rem;
+    }
+    
+    .generated-sentence {
+        font-size: 1.1rem;
+        font-weight: bold;
+        color: #2c3e50;
+        background-color: #fff3cd;
+        padding: 1rem;
+        border-radius: 0.375rem;
+        border-left: 4px solid #ffc107;
         margin-bottom: 1rem;
     }
     
@@ -71,120 +82,56 @@ st.markdown("""
         margin-bottom: 1.5rem;
     }
     
-    .metric-badge {
-        display: inline-block;
-        padding: 0.25rem 0.5rem;
-        border-radius: 0.25rem;
-        font-size: 0.875rem;
-        font-weight: bold;
-        margin-right: 0.5rem;
-    }
-    
-    .metric-bert {
-        background-color: #d1ecf1;
-        color: #0c5460;
-    }
-    
-    .metric-bleu {
-        background-color: #d4edda;
-        color: #155724;
-    }
-    
-    .metric-rouge {
-        background-color: #f8d7da;
-        color: #721c24;
-    }
-    
-    .metric-radgraph {
-        background-color: #e7d4f8;
-        color: #5a2d7a;
-    }
-    
-    .metric-ratescore {
-        background-color: #fff4e6;
-        color: #8b5a00;
-    }
-    
-    .metric-cxrscore {
-        background-color: #e6f3ff;
-        color: #004085;
-    }
-    
-    .sortable-item {
-        background-color: white;
-        border: 1px solid #ccc;
-        border-radius: 0.25rem;
+    .info-box {
+        background-color: #e7f3ff;
+        border: 1px solid #2196F3;
+        border-radius: 0.375rem;
         padding: 0.75rem;
-        margin: 0.5rem 0;
-        cursor: move;
+        margin-bottom: 0.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
-def load_example_data(file_path="example_data.json"):
-    """加载示例数据（JSON格式）"""
-    try:
-        # 检查文件是否存在于当前目录
-        current_dir = Path(__file__).parent
-        full_path = current_dir / file_path
-        
-        if not full_path.exists():
-            # 尝试相对于工作目录查找
-            full_path = Path(file_path)
-        
-        with open(full_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return data
-    except FileNotFoundError:
-        st.error(f"找不到文件: {file_path}")
-        return None
-    except json.JSONDecodeError as e:
-        st.error(f"JSON解析错误: {e}")
-        return None
-
 def load_excel_data(file_path):
-    """从Excel文件加载数据，提取中文句子作为候选"""
+    """从Excel文件加载数据，提取原始答案和生成答案"""
     try:
         df = pd.read_excel(file_path)
         
         # 检查必需的列
-        if 'report_sentence_cn' not in df.columns:
-            st.error("❌ Excel文件缺少 'report_sentence_cn' 列")
+        required_cols = ['原始答案', '生成答案']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            st.error(f"❌ Excel文件缺少必需的列: {missing_cols}")
             return None
         
         # 转换数据格式
         sentences = []
         
-        # 查找所有metric的中文列（排除report_sentence_cn）
-        metric_cols = {}
-        for col in df.columns:
-            if col.endswith('_sentence_cn') and col != 'report_sentence_cn':
-                metric_name = col.replace('_sentence_cn', '')
-                metric_cols[metric_name] = col
-        
         for idx, row in df.iterrows():
-            # 原始句子（中文）
-            his_sentence = str(row.get('report_sentence_cn', '')).strip()
-            if pd.isna(row.get('report_sentence_cn')) or not his_sentence:
+            # 优先使用中文，如果没有则使用英文
+            original_answer = str(row.get('原始答案', '')).strip()
+            if pd.isna(row.get('原始答案')) or not original_answer:
+                original_answer = str(row.get('原始答案(英文)', '')).strip()
+            
+            generated_answer = str(row.get('生成答案(中文)', '')).strip()
+            if pd.isna(row.get('生成答案(中文)')) or not generated_answer:
+                generated_answer = str(row.get('生成答案', '')).strip()
+            if pd.isna(row.get('生成答案')) or not generated_answer:
+                generated_answer = str(row.get('生成答案(英文)', '')).strip()
+            
+            # 如果原始答案或生成答案为空，跳过
+            if not original_answer or not generated_answer:
                 continue
             
-            # 收集所有metric的中文候选句子
-            matched_sentences = []
-            for metric_name, cn_col in metric_cols.items():
-                cn_sentence = str(row.get(cn_col, '')).strip()
-                if pd.notna(row.get(cn_col)) and cn_sentence:
-                    matched_sentences.append({
-                        'metric': metric_name,
-                        'sentence': cn_sentence
-                    })
+            # 收集其他信息
+            sentence_data = {
+                'original_answer': original_answer,
+                'generated_answer': generated_answer,
+                '模型来源': str(row.get('模型来源', '')),
+                'row_idx': idx
+            }
             
-            if matched_sentences:
-                sentences.append({
-                    'his_sentence': his_sentence,
-                    'matched_sentence': matched_sentences,
-                    '大类': row.get('大类', ''),
-                    '小类': row.get('小类', '')
-                })
+            sentences.append(sentence_data)
         
         return {
             'sentences': sentences,
@@ -199,26 +146,8 @@ def load_excel_data(file_path):
         st.error(traceback.format_exc())
         return None
 
-def get_metric_class(metric):
-    """根据metric返回对应的CSS类"""
-    metric_lower = metric.lower()
-    if 'bert' in metric_lower:
-        return 'metric-bert'
-    elif 'bleu' in metric_lower:
-        return 'metric-bleu'
-    elif 'rouge' in metric_lower:
-        return 'metric-rouge'
-    elif 'radgraph' in metric_lower:
-        return 'metric-radgraph'
-    elif 'ratescore' in metric_lower or 'rate' in metric_lower:
-        return 'metric-ratescore'
-    elif 'cxrscore' in metric_lower or 'cxr' in metric_lower:
-        return 'metric-cxrscore'
-    else:
-        return 'metric-bert'
-
-def save_ranking_results(username, results, batch_idx=None, output_dir="ranking_results"):
-    """保存排序结果"""
+def save_evaluation_results(username, results, batch_idx=None, output_dir="evaluation_results"):
+    """保存评估结果"""
     if not username or not username.strip():
         raise ValueError("用户名不能为空")
     
@@ -230,7 +159,7 @@ def save_ranking_results(username, results, batch_idx=None, output_dir="ranking_
     if batch_idx is not None:
         filename = f"batch_{batch_idx}_{username}_{timestamp}.json"
     else:
-        filename = f"ranking_{username}_{timestamp}.json"
+        filename = f"evaluation_{username}_{timestamp}.json"
     filepath = os.path.join(output_dir, filename)
     
     # 准备保存的数据
@@ -248,19 +177,19 @@ def save_ranking_results(username, results, batch_idx=None, output_dir="ranking_
     return filepath
 
 def main():
-    st.markdown('<div class="main-header">📝 句子错误评估系统</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">📝 句子级别评估系统 v2</div>', unsafe_allow_html=True)
     
     # 初始化session state
     if 'data' not in st.session_state:
         st.session_state.data = None
-    if 'error_results' not in st.session_state:
-        st.session_state.error_results = {}  # 存储错误计数结果
+    if 'evaluation_results' not in st.session_state:
+        st.session_state.evaluation_results = {}  # 存储评估结果
     if 'current_batch' not in st.session_state:
         st.session_state.current_batch = 0
     if 'batch_saved' not in st.session_state:
         st.session_state.batch_saved = set()  # 记录已保存的批次
 
-    batch_size = 1
+    batch_size = 5  # 每批次5个句子
 
     # 侧边栏 - 用户信息
     st.sidebar.header("👤 用户信息")
@@ -276,7 +205,7 @@ def main():
     uploaded_file = st.sidebar.file_uploader(
         "上传文件（支持JSON或Excel）",
         type=['json', 'xlsx', 'xls'],
-        help="请上传包含句子数据的JSON文件或Excel文件（paired_sentences.xlsx）"
+        help="请上传包含句子数据的JSON文件或Excel文件（merged_benchmark_result（正式版）.xlsx）"
     )
     
     if uploaded_file is not None:
@@ -284,13 +213,7 @@ def main():
             # 根据文件类型选择加载方式
             file_extension = uploaded_file.name.split('.')[-1].lower()
             
-            if file_extension == 'json':
-                # 加载JSON文件
-                data = json.load(uploaded_file)
-                st.session_state.data = data
-                st.session_state.error_results = {}
-                st.sidebar.success("✅ JSON文件加载成功！")
-            elif file_extension in ['xlsx', 'xls']:
+            if file_extension in ['xlsx', 'xls']:
                 # 加载Excel文件
                 # 保存上传的文件到临时位置
                 import tempfile
@@ -301,7 +224,7 @@ def main():
                 data = load_excel_data(tmp_path)
                 if data:
                     st.session_state.data = data
-                    st.session_state.error_results = {}
+                    st.session_state.evaluation_results = {}
                     st.sidebar.success(f"✅ Excel文件加载成功！共 {data.get('total_sentences', 0)} 个句子")
                 
                 # 清理临时文件
@@ -312,7 +235,6 @@ def main():
             st.sidebar.error(f"❌ 文件加载失败: {e}")
             import traceback
             st.sidebar.error(traceback.format_exc())
-    
     
     # 主界面
     if st.session_state.data is None:
@@ -376,7 +298,7 @@ def main():
     with col_info2:
         st.metric("批次句子数", f"{len(batch_sentences)}")
     with col_info3:
-        batch_completed = sum(1 for i in range(start_idx, end_idx) if i in st.session_state.error_results)
+        batch_completed = sum(1 for i in range(start_idx, end_idx) if i in st.session_state.evaluation_results)
         st.metric("已评估", f"{batch_completed}/{len(batch_sentences)}")
     
     # 显示说明
@@ -384,9 +306,9 @@ def main():
     <div class="instruction-box">
         <strong>📋 使用说明：</strong>
         <ul>
-            <li>左侧选择要处理的批次</li>
-            <li>每个卡片显示一个原始句子及其匹配的候选句子</li>
-            <li>请为每个候选句子统计以下4类错误的数量：</li>
+            <li>左侧选择要处理的批次（每批次5个句子）</li>
+            <li>每个卡片显示一个原始答案和生成答案的对比</li>
+            <li>请为每个生成答案统计以下4类错误的数量：</li>
             <ol>
                 <li><strong>预测错误</strong>：原报告没有，预测有（如原报告没有肺部阴影，预测有阴影）</li>
                 <li><strong>缺失预测</strong>：原报告有，预测没有（如原报告有肺部结节，预测没有结节）</li>
@@ -398,106 +320,96 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    # 为当前批次的每个句子创建排序界面
+    # 为当前批次的每个句子创建评估界面
     for local_idx, sentence_data in enumerate(batch_sentences):
         global_idx = start_idx + local_idx  # 全局索引
-        his_sentence = sentence_data.get('his_sentence', '')
-        matched_sentences = sentence_data.get('matched_sentence', [])
+        original_answer = sentence_data.get('original_answer', '')
+        generated_answer = sentence_data.get('generated_answer', '')
+        row_idx = sentence_data.get('row_idx', None)
         
         # 创建卡片
         with st.container():
-            # st.markdown(f'<div class="sentence-card">', unsafe_allow_html=True)
-            
-            # 显示原始句子（显示全局编号）
             st.markdown(f"### 句子 #{global_idx + 1} (批次内第 {local_idx + 1} 个)")
             
-            st.markdown(f'<div class="his-sentence">📌 原始句子: {his_sentence}</div>', 
+            # 显示原始答案
+            st.markdown(f'<div class="original-sentence">原始答案: {original_answer}</div>', 
                        unsafe_allow_html=True)
             
-            # # 错误评估部分
-            # st.markdown('<div class="section-title">❌ 错误统计（请为每个候选句子统计错误数量）</div>', 
-            #            unsafe_allow_html=True)
+            # 显示生成答案
+            st.markdown(f'<div class="generated-sentence">生成答案: {generated_answer}</div>', 
+                       unsafe_allow_html=True)
             
-            if matched_sentences:
-                # 初始化当前句子的错误结果
-                if global_idx not in st.session_state.error_results:
-                    st.session_state.error_results[global_idx] = {
-                        'global_idx': global_idx,
-                        'his_sentence': his_sentence,
-                        'errors': {}
-                    }
-                
-                # 为每个候选句子创建错误计数输入
-                for match_idx, match in enumerate(matched_sentences):
-                    metric = match.get('metric', 'unknown')
-                    sentence = match.get('sentence', '')
-                    metric_class = get_metric_class(metric)
-                    
-                    # 创建唯一key
-                    error_key_prefix = f"error_{global_idx}_{match_idx}_{metric}"
-                    
-                    # 显示候选句子
-                    st.markdown(f"**候选句子 {match_idx + 1}:** {sentence}", 
-                               unsafe_allow_html=True)
-
-                    # st.markdown(f"**候选句子 {match_idx + 1}:** <span class='metric-badge {metric_class}'>{metric.upper()}</span> {sentence}", 
-                    #            unsafe_allow_html=True)
-                    
-                    # 4个错误类型的计数输入
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        error1_key = f"{error_key_prefix}_prediction_error"
-                        error1_count = st.number_input(
-                            "1. 预测错误",
-                            min_value=0,
-                            value=int(st.session_state.error_results[global_idx]['errors'].get(f"{metric}_prediction_error", 0)),
-                            key=error1_key,
-                            help="原报告没有，预测有"
-                        )
-                    
-                    with col2:
-                        error2_key = f"{error_key_prefix}_missing_prediction"
-                        error2_count = st.number_input(
-                            "2. 缺失预测",
-                            min_value=0,
-                            value=int(st.session_state.error_results[global_idx]['errors'].get(f"{metric}_missing_prediction", 0)),
-                            key=error2_key,
-                            help="原报告有，预测没有"
-                        )
-                    
-                    with col3:
-                        error3_key = f"{error_key_prefix}_location_error"
-                        error3_count = st.number_input(
-                            "3. 位置描述错误",
-                            min_value=0,
-                            value=int(st.session_state.error_results[global_idx]['errors'].get(f"{metric}_location_error", 0)),
-                            key=error3_key,
-                            help="不正确的位置描述"
-                        )
-                    
-                    with col4:
-                        error4_key = f"{error_key_prefix}_severity_error"
-                        error4_count = st.number_input(
-                            "4. 严重程度错误",
-                            min_value=0,
-                            value=int(st.session_state.error_results[global_idx]['errors'].get(f"{metric}_severity_error", 0)),
-                            key=error4_key,
-                            help="不正确的严重程度"
-                        )
-                    
-                    # 保存错误计数和中文句子
-                    st.session_state.error_results[global_idx]['errors'][f"{metric}_prediction_error"] = error1_count
-                    st.session_state.error_results[global_idx]['errors'][f"{metric}_missing_prediction"] = error2_count
-                    st.session_state.error_results[global_idx]['errors'][f"{metric}_location_error"] = error3_count
-                    st.session_state.error_results[global_idx]['errors'][f"{metric}_severity_error"] = error4_count
-                    st.session_state.error_results[global_idx]['errors'][f"{metric}_sentence_cn"] = sentence
-                    
-                    st.markdown("---")
-            else:
-                st.warning("该句子没有匹配的候选句子")
+            # 显示指标（如果存在）
+            metric_cols = ['bertscore_f1', 'bleu', 'cxrscore_har_score', 'rouge_l', 'meteor']
+            available_metrics = {col: sentence_data.get(col) for col in metric_cols if col in sentence_data}
+            if available_metrics:
+                st.markdown("**评估指标:**")
+                metric_display = ", ".join([f"{k}: {v:.4f}" for k, v in available_metrics.items()])
+                st.markdown(metric_display)
             
-            st.markdown('</div>', unsafe_allow_html=True)
+            # 初始化当前句子的评估结果
+            if global_idx not in st.session_state.evaluation_results:
+                st.session_state.evaluation_results[global_idx] = {
+                    'global_idx': global_idx,
+                    'row_idx': row_idx,
+                    'original_answer': original_answer,
+                    'generated_answer': generated_answer,
+                    'errors': {}
+                }
+            
+            # 错误评估部分
+            st.markdown('<div class="section-title">错误统计</div>', 
+                       unsafe_allow_html=True)
+            
+            # 4个错误类型的计数输入
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                error1_key = f"error_{global_idx}_prediction_error"
+                error1_count = st.number_input(
+                    "1. 预测错误",
+                    min_value=0,
+                    value=int(st.session_state.evaluation_results[global_idx]['errors'].get('prediction_error', 0)),
+                    key=error1_key,
+                    help="原报告没有，预测有（如原报告没有肺部阴影，预测有阴影）"
+                )
+            
+            with col2:
+                error2_key = f"error_{global_idx}_missing_prediction"
+                error2_count = st.number_input(
+                    "2. 缺失预测",
+                    min_value=0,
+                    value=int(st.session_state.evaluation_results[global_idx]['errors'].get('missing_prediction', 0)),
+                    key=error2_key,
+                    help="原报告有，预测没有（如原报告有肺部结节，预测没有结节）"
+                )
+            
+            with col3:
+                error3_key = f"error_{global_idx}_location_error"
+                error3_count = st.number_input(
+                    "3. 位置描述错误",
+                    min_value=0,
+                    value=int(st.session_state.evaluation_results[global_idx]['errors'].get('location_error', 0)),
+                    key=error3_key,
+                    help="不正确的位置描述（如原报告有左下肺阴影，预测右肺阴影）"
+                )
+            
+            with col4:
+                error4_key = f"error_{global_idx}_severity_error"
+                error4_count = st.number_input(
+                    "4. 严重程度错误",
+                    min_value=0,
+                    value=int(st.session_state.evaluation_results[global_idx]['errors'].get('severity_error', 0)),
+                    key=error4_key,
+                    help="不正确的严重程度（如原报告严重胸膜粘连，预测轻度粘连）"
+                )
+            
+            # 保存错误计数
+            st.session_state.evaluation_results[global_idx]['errors']['prediction_error'] = error1_count
+            st.session_state.evaluation_results[global_idx]['errors']['missing_prediction'] = error2_count
+            st.session_state.evaluation_results[global_idx]['errors']['location_error'] = error3_count
+            st.session_state.evaluation_results[global_idx]['errors']['severity_error'] = error4_count
+            
             st.markdown("---")
     
     # 下载按钮
@@ -507,7 +419,7 @@ def main():
     
     with col2:
         # 下载当前批次
-        batch_results_dict = {k: v for k, v in st.session_state.error_results.items() 
+        batch_results_dict = {k: v for k, v in st.session_state.evaluation_results.items() 
                              if start_idx <= k < end_idx}
         if batch_results_dict:
             # 将字典转换为数组，按global_idx排序
@@ -519,8 +431,8 @@ def main():
                 "batch_idx": current_batch + 1,
                 "batch_range": f"{start_idx}-{end_idx-1}",
                 "error_types": {
-                    "1": "预测错误（原报告没有，预测有）",
-                    "2": "缺失预测（原报告有，预测没有）",
+                    "1": "预测错误",
+                    "2": "缺失预测",
                     "3": "位置描述错误",
                     "4": "严重程度错误"
                 },
